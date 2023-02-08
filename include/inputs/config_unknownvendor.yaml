@@ -1,0 +1,4 @@
+dag_id: "Unknown_vendor"
+schedule_interval: '@daily'
+catchup: False
+input: 512
