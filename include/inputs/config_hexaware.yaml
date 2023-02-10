@@ -1,4 +1,10 @@
-dag_id: "Hexaware"
-schedule_interval: '@daily'
+dag_id: "hexaware"
+schedule_interval: '@hourly'
 catchup: False
-input: 256
+aws_conn_id: "'aws_default'"
+sftp_conn_id: "'sftp_default'"
+bucket_name: "'astronomer-dataprocessing-poc'"
+source_folder: "'inbound/hexaware/'"
+archived_folder: "'archived/'"
+destination_folder: "'outbound/hexaware/'"
+destination_download: "'/usr/local/airflow/workspace/'"

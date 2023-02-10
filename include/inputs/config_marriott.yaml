@@ -1,10 +1,10 @@
-dag_id: "unknownvendor"
-schedule_interval: '@monthly'
+dag_id: "marriott"
+schedule_interval: '@daily'
 catchup: False
 aws_conn_id: "'aws_default'"
 sftp_conn_id: "'sftp_default'"
 bucket_name: "'astronomer-dataprocessing-poc'"
-source_folder: "'inbound/unknown-vendor/'"
+source_folder: "'inbound/marriott/'"
 archived_folder: "'archived/'"
-destination_folder: "'outbound/unknown-vendor/'"
+destination_folder: "'outbound/marriott/'"
 destination_download: "'/usr/local/airflow/workspace/'"
