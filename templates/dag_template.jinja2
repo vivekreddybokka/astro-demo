@@ -1,21 +1,107 @@
 from airflow import DAG
 from airflow.decorators import task
-from datetime import datetime
+from airflow.operators.python_operator import PythonOperator
+from datetime import datetime, timedelta
+import pandas as pd
+import os
+import boto3
+from airflow.hooks.base_hook import BaseHook
+from io import StringIO
+from airflow.providers.sftp.hooks.sftp import SFTPHook
 
-with DAG("get_price_{{ dag_id }}", start_date=datetime(2023, 1, 1), schedule_interval="{{ schedule_interval }}",)
+e = datetime.now()
+today = e.strftime("%Y-%m-%d-%H-%M-%S")
+
+# Connect to AWS using the default connection
+aws_conn = BaseHook.get_connection({{aws_conn_id}})
+
+s3 = boto3.client('s3', aws_access_key_id=aws_conn.login, aws_secret_access_key=aws_conn.password)
+with DAG("{{ dag_id }}", start_date=datetime(2023, 1, 1), schedule="{{ schedule_interval }}", 
     catchup={{ catchup or False }}) as dag:
 
     @task
-    def extract(stock):
-        return stock
-    
-    @task
-    def process(stock):
-        return stock
+    def get_secret():
+        secret_name = "airflowuser/transferfamily_key"
+        region_name = "us-east-1"
+
+    # Create a Secrets Manager client
+        session = boto3.session.Session()
+        client = session.client(service_name='secretsmanager',region_name=region_name)
+        get_secret_value_response = client.get_secret_value(SecretId=secret_name)
+
+    # Decrypts secret using the associated KMS key.
+        secret = get_secret_value_response['SecretString']
+        outF = open("privatekey.txt", "w")
+        outF.writelines(secret)
+        outF.close()
+
+        #conn = pysftp.Connection(host=host,port=port,username=username, private_key="privatekey.txt")
+        
+        conn = SFTPHook(ssh_conn_id='sftp_default')
+
+        print("connection established successfully")
+        with conn.cd('Internal/hexaware/'):
+            files = conn.listdir()
+            print (len(files))
+            for file in files:
+                if (file[-4:]=='.csv'):
+                    conn.get(file)
+                    print(file,' downloaded successfully ')
+            return files, conn
 
     @task
-    def send_email(stock):
-        print(stock)
-        return stock
+    def list_and_copy_files(files, conn):
+        # List all files in the folder
+        #result = s3.list_objects_v2(Bucket={{bucket_name}}, Prefix={{source_folder}})
+       
+        #for file in result.get("Contents"):
+            #file_key = file.get("Key")
+            #print ("This is file key", file_key)
+        # Skip the folder itself, only process the files inside the folder
+            #if file_key.endswith("/"):
+                #continue
+  
+            #Reading the csv file as a Pandas DataFrame. The file can be an excel sheet. Other libraries exist for different filetypes like pdf,docx,txt
+  
+            #read_file = s3.get_object(Bucket={{bucket_name}}, Key=file_key)
+            original_data = pd.read_csv(files[0])
+            key="Birth Date"
+            #Checking datatype of key here. If string convert to datetime object for sorting
+
+            if type(original_data.iloc[0][key])==str:
+                working_data=original_data.copy()
+                working_data[key]=pd.to_datetime(working_data[key])
+                sorted_data=working_data.sort_values(by=key)
+                print ("This is sorted data", sorted_data)
     
-    send_email(process(extract({input})))
+                sorted_data.to_csv('sorted_data.csv',index=False)
+                conn.put('sorted_data.csv')
+                csv_buffer = StringIO()
+                
+                #sorted_data.to_csv(csv_buffer)
+                
+                #new_file_name = today + '-' + file_key.split("/")[-1]
+                #new_file_path = {{destination_folder}} + new_file_name
+                #sorted_data.to_csv({{destination_download}} + new_file_name)
+
+                #response = s3.put_object(
+                #Body=csv_buffer.getvalue(),
+                #Bucket={{bucket_name}},
+                #Key=new_file_path,
+                #)
+            print ("done writing data to sorted_data.csv")
+            #return file_key
+ 
+
+
+    #@task
+    #def archive_file(filelist):
+
+            # The new file name and the full path of the new file
+            #new_file_name = 'archive-' + filelist.split("/")[-1]
+            #new_file_path = {{archived_folder}} + new_file_name
+            #s3.copy_object(Bucket={{bucket_name}}, CopySource={"Bucket": {{bucket_name}}, "Key": filelist}, Key=new_file_path)
+            #s3.delete_object(Bucket={{bucket_name}}, Key=filelist)
+
+    
+    list_and_copy_files(get_secret())
