@@ -11,5 +11,5 @@ for filename in os.listdir(f"{file_dir}/inputs"):
     if filename.endswith('.yaml'):
         with open(f"{file_dir}/inputs/{filename}", "r") as input_file:
             inputs= yaml.safe_load(input_file)
-            with open(f"dags/get_price{inputs['dag_id']}.py", "w") as f:
+            with open(f"/Users/vivekreddy/Documents/workspace/astro/dags/{inputs['dag_id']}.py", "w") as f:
                 f.write(template.render(inputs))
