@@ -3,105 +3,98 @@ from airflow.decorators import task
 from airflow.operators.python_operator import PythonOperator
 from datetime import datetime, timedelta
 import pandas as pd
-import os
 import boto3
 from airflow.hooks.base_hook import BaseHook
 from io import StringIO
 from airflow.providers.sftp.hooks.sftp import SFTPHook
+from airflow.operators.email_operator import EmailOperator
 
 e = datetime.now()
 today = e.strftime("%Y-%m-%d-%H-%M-%S")
 
 # Connect to AWS using the default connection
 aws_conn = BaseHook.get_connection({{aws_conn_id}})
+sftp_hook = SFTPHook(ssh_conn_id={{sftp_conn_id}})
 
-s3 = boto3.client('s3', aws_access_key_id=aws_conn.login, aws_secret_access_key=aws_conn.password)
-with DAG("{{ dag_id }}", start_date=datetime(2023, 1, 1), schedule="{{ schedule_interval }}", 
-    catchup={{ catchup or False }}) as dag:
+default_args = {
+    'owner': 'airflow',
+    'start_date': datetime(2023, 2, 16),
+    'email': ['bokkavivek26@gmail.com'],
+    'email_on_failure': True,
+    'email_on_success': True,
+    'email_on_retry': True,
+}
+
+#s3 = boto3.client('s3', aws_access_key_id=aws_conn.login, aws_secret_access_key=aws_conn.password)
+with DAG("{{ dag_id }}", schedule="{{ schedule_interval }}", default_args=default_args, catchup={{ catchup or False }}) as dag:
 
     @task
-    def get_secret():
-        secret_name = "airflowuser/transferfamily_key"
-        region_name = "us-east-1"
-
+    def get_secret(**kwargs):
     # Create a Secrets Manager client
         session = boto3.session.Session()
-        client = session.client(service_name='secretsmanager',region_name=region_name)
-        get_secret_value_response = client.get_secret_value(SecretId=secret_name)
+        client = session.client(service_name='secretsmanager',region_name={{region_name}}, aws_access_key_id=aws_conn.login, aws_secret_access_key=aws_conn.password)
+        get_secret_value_response = client.get_secret_value(SecretId={{secret_name}})
 
     # Decrypts secret using the associated KMS key.
         secret = get_secret_value_response['SecretString']
         outF = open("privatekey.txt", "w")
         outF.writelines(secret)
         outF.close()
-
-        #conn = pysftp.Connection(host=host,port=port,username=username, private_key="privatekey.txt")
-        
-        conn = SFTPHook(ssh_conn_id='sftp_default')
-
-        print("connection established successfully")
-        with conn.cd('Internal/hexaware/'):
-            files = conn.listdir()
-            print (len(files))
-            for file in files:
-                if (file[-4:]=='.csv'):
-                    conn.get(file)
-                    print(file,' downloaded successfully ')
-            return files, conn
+        return "pass"
 
     @task
-    def list_and_copy_files(files, conn):
-        # List all files in the folder
-        #result = s3.list_objects_v2(Bucket={{bucket_name}}, Prefix={{source_folder}})
-       
-        #for file in result.get("Contents"):
-            #file_key = file.get("Key")
-            #print ("This is file key", file_key)
-        # Skip the folder itself, only process the files inside the folder
-            #if file_key.endswith("/"):
-                #continue
-  
-            #Reading the csv file as a Pandas DataFrame. The file can be an excel sheet. Other libraries exist for different filetypes like pdf,docx,txt
-  
-            #read_file = s3.get_object(Bucket={{bucket_name}}, Key=file_key)
-            original_data = pd.read_csv(files[0])
-            key="Birth Date"
-            #Checking datatype of key here. If string convert to datetime object for sorting
+    def list_files(statement):
+        statement = statement       
+        conn = sftp_hook.get_conn()
+        files_list = conn.listdir({{source_folder}})
+        return files_list
 
-            if type(original_data.iloc[0][key])==str:
-                working_data=original_data.copy()
-                working_data[key]=pd.to_datetime(working_data[key])
-                sorted_data=working_data.sort_values(by=key)
-                print ("This is sorted data", sorted_data)
+    @task
+    def get_file(file_name):
+        conn = sftp_hook.get_conn()
+        file = file_name[0]
+        remote_full_path = {{source_folder}} + file
+        local_full_path = {{local_folder}} + file
+        conn.get(remote_full_path, local_full_path)
+        return (remote_full_path,local_full_path,file)
+
+
+    @task
+    def sort_data(path_tuple):
+        local_full_path=path_tuple[1]
+        file=path_tuple[2]
+        remote_file_path = {{destination_folder}}+'/'+today+'-'+file
+        original_data = pd.read_csv(local_full_path)
+        print (original_data)
+        key={{sort_column}}
+        if type(original_data.iloc[0][key])==str:
+            working_data=original_data.copy()
+            working_data[key]=pd.to_datetime(working_data[key])
+            sorted_data=working_data.sort_values(by=key)
+            print ("This is sorted data", sorted_data)
+            sorted_data.to_csv('sorted_data.csv',index=False)
+            csv_buffer = StringIO()
+            sorted_data.to_csv(csv_buffer)
+        return remote_file_path
+        
     
-                sorted_data.to_csv('sorted_data.csv',index=False)
-                conn.put('sorted_data.csv')
-                csv_buffer = StringIO()
-                
-                #sorted_data.to_csv(csv_buffer)
-                
-                #new_file_name = today + '-' + file_key.split("/")[-1]
-                #new_file_path = {{destination_folder}} + new_file_name
-                #sorted_data.to_csv({{destination_download}} + new_file_name)
+    @task
+    def put_file(remote_path):
+        conn = sftp_hook.get_conn()
+        conn.put('sorted_data.csv', remote_path, confirm=True)
 
-                #response = s3.put_object(
-                #Body=csv_buffer.getvalue(),
-                #Bucket={{bucket_name}},
-                #Key=new_file_path,
-                #)
-            print ("done writing data to sorted_data.csv")
-            #return file_key
- 
+    @task
+    def send_email():
+        EmailOperator(
+        to=['bokkavivek26@gmail.com'],
+        subject='Airflow alert: task success or failure',
+        html_content="""<h3>Task status:</h3>
+            {% if ti.state == 'SUCCESS' %}
+                <p>The task succeeded.</p>
+            {% else %}
+                <p>The task failed.</p>
+            {% endif %}""",
+        dag=dag,
+        )
 
-
-    #@task
-    #def archive_file(filelist):
-
-            # The new file name and the full path of the new file
-            #new_file_name = 'archive-' + filelist.split("/")[-1]
-            #new_file_path = {{archived_folder}} + new_file_name
-            #s3.copy_object(Bucket={{bucket_name}}, CopySource={"Bucket": {{bucket_name}}, "Key": filelist}, Key=new_file_path)
-            #s3.delete_object(Bucket={{bucket_name}}, Key=filelist)
-
-    
-    list_and_copy_files(get_secret())
+    put_file(sort_data(get_file(list_files(get_secret()))))
