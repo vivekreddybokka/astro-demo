@@ -3,8 +3,12 @@ schedule_interval: '@hourly'
 catchup: False
 aws_conn_id: "'aws_default'"
 sftp_conn_id: "'sftp_default'"
+secret_name: "'airflowuser/transferfamily_key'"
+region_name: "'us-east-1'"
 bucket_name: "'astronomer-dataprocessing-poc'"
 source_folder: "'inbound/hexaware/'"
+local_folder: "'/usr/local/airflow/templates/'"
 archived_folder: "'archived/'"
 destination_folder: "'outbound/hexaware/'"
 destination_download: "'/usr/local/airflow/workspace/'"
+sort_column: "'Birth Date'"
